@@ -40,6 +40,12 @@ version: 1.3.0
 - 科目/班级/命题人信息发生变化
 - 出现明显的分隔线或"第X页 共Y页"重置
 
+**不应判为多卷的情况**（否定规则）：
+- 题干内容中出现"第1题"字样（非题号标记）
+- 同一试卷的附加页/续页（页码增加但科目、题型结构连续）
+- 参考答案与试题正文被误判为独立试卷（检查是否只有答案无题干）
+- 同一学校/学科不同题型分节（如"一、选择"→"二、填空"是单卷的正常分段）
+
 **输出规则**：
 - **多卷**：分别输出 `temp/clean_1.json`、`temp/clean_2.json`...，每个文件包含一套完整试卷的 `metadata` 和 `questions`
 - **单卷**：输出 `temp/clean.json`
@@ -50,7 +56,7 @@ version: 1.3.0
 1. 识别题型（选择/判断/填空/简答/论述/案例分析/计算/应用等），附带 `confidence`（高/中/低）
 2. 提取每题的 `id`、`question_type`、`stem`、`options`、`answer`、`explanation`、`score`、`rubric`、`knowledge_point`、`cognitive_level`、`difficulty`
 3. 答案自动关联（可能在题干后，也可能在文末"答案与解析"部分）
-4. 判断题答案标准化：A/正确/对/√ → "正确"，B/错误/错/× → "错误"
+4. 判断题答案标准化：A/正确/对/√/TRUE → "正确"，B/错误/错/×/FALSE → "错误"
 5. 选择题选项提取为数组 `["A. 内容", "B. 内容", ...]`
 6. **知识点自动识别**（MANDATORY）：即使原始试题无标注，MUST 根据题干+选项+解析自动识别 `knowledge_point`：
    - 选择题/判断题：从题干关键词 + 解析提取核心考点
@@ -60,6 +66,29 @@ version: 1.3.0
 7. 低置信度题型标记"待确认"，无法识别的题跳过（不要编造）
 
 **输出格式**：标准 clean JSON，包含 `metadata`（title/total_score/source_type）、`parse_quality`（high/medium/low）、`questions` 数组（每题含 id、question_type、stem、options、answer、explanation、score、knowledge_point、cognitive_level、difficulty、confidence）。
+
+### Phase 2+ 输出质量自动验证（Word/PDF 路径必须执行）
+
+生成 clean.json 后，MUST 计算以下覆盖率指标：
+
+| 指标 | 计算公式 | 合格阈值 |
+|------|----------|----------|
+| 答案覆盖率 | `有 answer 字段的题数 / 总题数` | ≥80% |
+| 题型识别率 | `question_type ≠ "未知" 的题数 / 总题数` | ≥80% |
+| 知识点覆盖率 | `knowledge_point ≠ "综合应用" 的题数 / 总题数` | ≥60% |
+
+**验证结果分支**：
+
+- **任一指标 < 80%（答案/题型）或 < 60%（知识点）** → ⚠️ 暂停后续流程，Do NOT 继续 Phase 3。
+  向用户展示验证结果（三项指标的具体数值），并明确询问：
+  > "当前 parse_quality 偏低（答案覆盖率 X%，题型识别率 Y%，知识点覆盖率 Z%）。是否启用 Agent 大模型深度识别进行二次解析？"
+  >
+  > - 选择"是"：Agent 重新逐题审阅 `raw.json` 中未识别/低置信度的段落，利用语义理解补充缺失字段
+  > - 选择"否"：按当前质量继续，parse_quality 标记为 "low"，报告中显示警告
+
+- **全部达标** → 继续 Phase 3
+
+> ⚠️ **clean.json 字段名校验**（Phase 3 前 MUST 确认）：`compute_metrics.py` 按固定字段名读取。确认 clean.json 中每题的字段名使用下划线命名（`question_type`、`cognitive_level`、`knowledge_point`），不得使用驼峰（`questionType`、`cognitiveLevel`）。任一字段名不匹配将导致 metrics.json 所有统计为 0 或"未知"。
 
 ### Phase 3: 量化指标计算
 
@@ -71,10 +100,25 @@ version: 1.3.0
 
 ### Phase 4: 确认模式（强制明确）
 
-**必须向用户确认：**
-1. **评价模式**（未指定时 AskUserQuestion）：整体（token 最少）/ 抽样 5-10 题（推荐）/ 逐题（token 最多）
-2. **权重预设**：默认（内容 25%, 结构 20%, 难度 20%, 区分度 15%, 规范 20%）或 `升学考试`/`日常测验`/`竞赛选拔`
-3. **低置信度题型确认**：confidence=低 的题向用户展示确认
+**必须向用户确认（使用以下精确交互格式）：**
+
+> **AskUserQuestion（一次询问三个问题）：**
+>
+> **问题1 - 评价模式**：请选择评价模式
+> - "整体评价"（推荐，token 最少）：全卷综合评分，速度最快
+> - "抽样评价"：分层抽取 5-10 题逐题评价后推导全卷
+> - "逐题评价"（token 最多）：每题独立评分，输出最详细
+>
+> **问题2 - 权重预设**：请选择评估权重标准
+> - "默认权重"（推荐）：内容25%, 结构20%, 难度20%, 区分度15%, 规范20%
+> - "升学考试"：侧重难度(30%)和区分度(25%)
+> - "日常测验"：侧重内容(30%)和规范性(25%)
+> - "竞赛选拔"：侧重区分度(30%)和难度(25%)
+>
+> **问题3 - 低置信度题型**（如有 confidence=低的题）：以下题目识别置信度较低，是否确认？
+> [列出低置信度题目摘要]
+
+用户未回复前 Do NOT 继续 Phase 5。
 
 ### Phase 5: Agent 评价
 
@@ -86,12 +130,12 @@ version: 1.3.0
 - **规范性**：题干表述有歧义吗？解析质量能帮助学生理解错误原因吗？
 
 **MANDATORY - READ ENTIRE FILE**: 评分前 MUST 完整读取
-[`references/evaluation_criteria.md`](references/evaluation_criteria.md)（~107 行），严格按 10 分制细则评分。
+[`references/evaluation_criteria.md`](references/evaluation_criteria.md)（51 行），严格按 10 分制细则评分。
 
 **条件加载**：
-- 用户要求分析认知层级分布 → 读取 [`references/bloom_taxonomy.md`](references/bloom_taxonomy.md)（~48 行）
-- 题型含简答/论述/案例分析等主观题 → 读取 [`references/question_types.md`](references/question_types.md)（~35 行）
-- 明确是职教/对口升学考试 → 读取 [`references/vocational_standards.md`](references/vocational_standards.md)（~25 行）
+- 用户要求分析认知层级分布 → 读取 [`references/bloom_taxonomy.md`](references/bloom_taxonomy.md)（18 行）
+- 题型含简答/论述/案例分析等主观题 → 读取 [`references/question_types.md`](references/question_types.md)（19 行）
+- 明确是职教/对口升学考试 → 读取 [`references/vocational_standards.md`](references/vocational_standards.md)（17 行）
 - 用户明确指定权重场景（如"按升学考试标准评估"）→ 读取 `references/weights/` 下对应预设
 
 **Do NOT load**：
@@ -113,12 +157,118 @@ version: 1.3.0
 - 每题/全卷 五个维度各评 1-10 分
 - **综合评分** = min(加权平均, 最低维度得分 + 2) — 短板机制
 - 列出优秀项、需改进项、具体建议（P0/P1/P2 优先级）
-- **MANDATORY 输出字段**：evaluation.json 必须包含 `knowledge_points_summary`（知识点词频统计 `{"知识点名称": 题数}`），用于词云图和知识点覆盖分析
-
 **评价模式差异：**
 - **整体模式**：全卷综合评分
 - **抽样模式**：分层抽取 5-10 题逐题评价，推导全卷
 - **逐题模式**：每题独立评分，输出详细明细
+
+### Phase 5 Output: evaluation.json Schema
+
+**MUST 严格按以下 Schema 输出，字段名必须完全匹配**（`generate_report.py` 按固定字段名读取，命名不一致将导致报告全部显示默认值/空白）：
+
+```json
+{
+  "evaluation_mode": "overall",
+  "overall_scores": {
+    "内容效度": 7,
+    "结构效度": 6,
+    "难度控制": 8,
+    "区分度潜力": 5,
+    "规范性": 7
+  },
+  "dimension_details": {
+    "内容效度": { "evidence": "考点覆盖了教材核心章节，但缺少xxx知识点..." },
+    "结构效度": { "evidence": "选项分布基本均衡，但第5题最长选项偏差达40%..." },
+    "难度控制": { "evidence": "低:中:高≈3:5:2，难度梯度合理..." },
+    "区分度潜力": { "evidence": "多数题为记忆型，缺乏应用分析类题目..." },
+    "规范性": { "evidence": "格式统一，但第3题题干存在歧义..." }
+  },
+  "weights": {
+    "内容效度": 0.25,
+    "结构效度": 0.20,
+    "难度控制": 0.20,
+    "区分度潜力": 0.15,
+    "规范性": 0.20
+  },
+  "strengths": [
+    "难度梯度设计合理，低中高比例为3:5:2",
+    "选择题干扰项设计有效"
+  ],
+  "weaknesses": [
+    "判断题答案严重偏向'正确'（占比75%），不符合命题规范",
+    "缺少答案解析，规范性不足"
+  ],
+  "suggestions": [
+    {
+      "priority": "P0",
+      "title": "调整判断题答案分布",
+      "description": "将判断题正确/错误比例调整至接近1:1，避免答案一边倒"
+    },
+    {
+      "priority": "P1",
+      "title": "补充题目解析",
+      "description": "为每道题添加详细解析，解释正确选项的原因和干扰项的排除理由"
+    }
+  ],
+  "questions": [
+    {
+      "id": "1",
+      "question_type": "选择题",
+      "stem_summary": "下列关于xxx的说法正确的是",
+      "scores": {
+        "内容效度": 8,
+        "结构效度": 7,
+        "难度控制": 6,
+        "区分度潜力": 5,
+        "规范性": 8
+      },
+      "total_score": 6.7
+    }
+  ],
+  "knowledge_points_summary": {
+    "细胞结构": 3,
+    "光合作用": 2,
+    "遗传定律": 1
+  }
+}
+```
+
+**字段说明：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `evaluation_mode` | string | ✅ | `"overall"` / `"per_question"` / `"sampling"` |
+| `overall_scores` | object | ✅ | 五个维度各评 1-10 分，键名必须用中文全称 |
+| `dimension_details` | object | ✅ | 每维度含 `evidence` 字段，说明评分理由 |
+| `weights` | object | ✅ | 五维度权重，值之和为 1.0 |
+| `strengths` | array | ✅ | 优秀项列表，每项为字符串 |
+| `weaknesses` | array | ✅ | 需改进项列表，每项为字符串 |
+| `suggestions` | array | ✅ | 含 `priority`（P0/P1/P2）、`title`、`description` |
+| `questions` | array | 逐题/抽样模式 | 含 `id`, `question_type`, `stem_summary`（≤30字）, `scores`（五维度）, `total_score` |
+| `knowledge_points_summary` | object | ✅ | `{"知识点名称": 出现次数}`，用于词云图 |
+
+> ⚠️ 字段名拼写错误（如 `overall_scores` 写成 `overallScores`、`scores` 或 `dimension_scores`）将导致 `generate_report.py` 的 `.get()` 全部返回默认值，报告显示综合评分 0.0、图表空白。
+
+### Phase 5+ evaluation.json Schema 校验（MUST 执行）
+
+写入 `temp/evaluation.json` 后，MUST 运行自动化校验脚本：
+
+```bash
+python scripts/validate_evaluation.py temp/evaluation.json [--mode overall|per_question|sampling]
+```
+
+**校验内容**（脚本内置）：
+- `evaluation_mode` 有效性、"区分度"简写检测
+- `overall_scores` 五维度完整 + 值域 [1,10]
+- `weights` 键名与 `overall_scores` 一致 + 值之和 = 1.0
+- `dimension_details` 五维度含 `evidence`
+- `knowledge_points_summary` 非空
+- `suggestions` 子字段 (`priority`/`title`/`description`)
+- 逐题模式：`questions` 数组每项含 `id`/`scores`/`total_score`
+
+**校验结果**：
+- 输出 `✅ 全部校验通过` → 继续 Phase 6
+- 输出 `❌ 校验失败 — N 个错误` → Do NOT 继续 Phase 6。根据输出的具体失败项修正 evaluation.json 后重新运行脚本，直到通过。
 
 ### Phase 6: 报告生成
 
@@ -140,13 +290,27 @@ version: 1.3.0
 
 ### Phase 7: 质量验证
 
-交付前验证：
-- [ ] 五个维度均有评分（1-10）
-- [ ] HTML 文件可打开
-- [ ] 图表正常渲染
-- [ ] 逐题表数据完整（逐题/抽样模式）
-- [ ] 中文显示正常
-- [ ] 综合评分计算正确（短板机制）
+交付前 MUST 执行以下自动化 + 手动验证：
+
+**1. 自动化验证**：
+```bash
+# Schema 校验（如跳过 Phase 5+，此处补执行）
+python scripts/validate_evaluation.py temp/evaluation.json [--mode overall|per_question|sampling]
+
+# 报告文件存在性
+test -f output/report.html && echo "✅ report.html 存在" || echo "❌ 缺失"
+```
+
+**2. 手动验证**：
+- [ ] 五个维度均有评分（1-10），综合评分计算正确（短板机制）
+- [ ] HTML 文件可打开，图表（雷达图/饼图/柱状图/词云）正常渲染
+- [ ] 逐题表数据完整（逐题/抽样模式下 questions 列数与总题数一致）
+- [ ] 中文显示正常，无乱码
+- [ ] 无"0.0"综合评分、无空白图表区域
+
+**3. 验证失败处理**：
+- 自动化验证失败 → 回 Phase 5+ 修正后重新运行
+- 手动验证失败 → 回 Phase 6 修正报告生成
 
 ## 错误处理（按优先级排序）
 
@@ -185,8 +349,13 @@ version: 1.3.0
 - 主文件：`output/report.html`（交互式可视化报告）
 - 可选：`output/逐题明细.csv`（从 HTML 导出按钮下载）
 
+| 评价模式/权重不一致 | evaluation_mode 与 questions 数组内容不匹配（如 mode="overall" 但有 questions 数据） |
+| 权重键名不一致 | weights 的键与 overall_scores 的键不完全匹配 → 某维度权重被静默置0 |
+
 ## 权重预设文件
 
-- `references/weights/升学考试.json` — 难度30%, 区分度25%, 内容20%, 结构15%, 规范10%
-- `references/weights/日常测验.json` — 内容30%, 规范25%, 难度20%, 结构15%, 区分度10%
-- `references/weights/竞赛选拔.json` — 区分度30%, 难度25%, 内容20%, 结构15%, 规范10%
+> ⚠️ **键名一致性约束**：所有权重预设文件的键名 MUST 与 `overall_scores` 完全一致，使用五维度的中文全称：`内容效度`、`结构效度`、`难度控制`、`区分度潜力`、`规范性`。不得使用简写（如"区分度"）。键名不匹配将导致对应维度权重被静默置0。
+
+- `references/weights/升学考试.json` — 难度30%, 区分度潜力25%, 内容20%, 结构15%, 规范10%
+- `references/weights/日常测验.json` — 内容30%, 规范25%, 难度20%, 结构15%, 区分度潜力10%
+- `references/weights/竞赛选拔.json` — 区分度潜力30%, 难度25%, 内容20%, 结构15%, 规范10%
