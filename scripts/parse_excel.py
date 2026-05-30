@@ -9,6 +9,7 @@
 import sys
 import json
 import argparse
+import re
 from pathlib import Path
 from collections import Counter
 
@@ -23,12 +24,9 @@ def load_header_patterns():
         'question_type': ['题型', '题目类型', 'type', '类别'],
         'stem': ['题干', '题目内容', '题目', 'stem', '内容'],
         'answer': ['正确答案', '答案', 'answer', '标准答案'],
-        'difficulty': ['难度', 'difficulty', '难易'],
+        'difficulty': ['难度', 'difficulty', '难易','难易程度'],
         'explanation': ['解析', 'explanation', '题目解析', '答案解析'],
-        'option_a': ['选项 A', 'A选项', 'A'],
-        'option_b': ['选项 B', 'B选项', 'B'],
-        'option_c': ['选项 C', 'C选项', 'C'],
-        'option_d': ['选项 D', 'D选项', 'D'],
+        # 选项列将在 auto_detect_columns 中通过正则动态匹配
         'score': ['分值', 'score', '分数', '得分'],
         'knowledge_point': ['知识点', '考核点', '考点'],
     }
@@ -44,7 +42,7 @@ def match_header(header, patterns):
     return None
 
 def auto_detect_columns(headers, patterns):
-    """自动检测列映射"""
+    """自动检测列映射（含动态选项列检测）"""
     mapping = {}
     for i, h in enumerate(headers):
         if h is None:
@@ -52,6 +50,17 @@ def auto_detect_columns(headers, patterns):
         field = match_header(h, patterns)
         if field:
             mapping[field] = i
+
+    # 动态检测未被 patterns 覆盖的选项列（支持 A-Z 任意数量）
+    opt_re = re.compile(r'^(?:选项\s*)?([A-Z])(?:\s*选项)?$', re.IGNORECASE)
+    for i, h in enumerate(headers):
+        if h is None or i in mapping.values():
+            continue
+        m = opt_re.match(str(h).strip())
+        if m:
+            letter = m.group(1).lower()
+            mapping[f'option_{letter}'] = i
+
     return mapping
 
 def detect_file_type(file_path):
@@ -136,11 +145,11 @@ def normalize_difficulty(raw_diff):
     if not raw_diff:
         return '中'
     diff = str(raw_diff).strip()
-    if diff in ('了解', '容易', '低', '简单'):
+    if diff in ('了解', '容易', '低', '简单','易','easy'):
         return '低'
-    elif diff in ('理解', '中等', '中', '一般'):
+    elif diff in ('理解', '中等', '中', '一般','middle'):
         return '中'
-    elif diff in ('应用', '较难', '高', '掌握', '困难'):
+    elif diff in ('应用', '较难', '高', '掌握', '困难','high'):
         return '高'
     return '中'
 
@@ -197,9 +206,8 @@ def parse_excel(file_path, output_path, confirm=False):
         if not stem:
             continue  # 跳过无题干的行
         
-        options = []
-        for opt in ['option_a', 'option_b', 'option_c', 'option_d']:
-            options.append(get_field(opt, ''))
+        opt_keys = sorted([k for k in col_mapping if k.startswith('option_')])
+        options = [get_field(k, '') for k in opt_keys]
         
         answer = normalize_answer(get_field('answer'), q_type)
         difficulty = normalize_difficulty(get_field('difficulty'))
