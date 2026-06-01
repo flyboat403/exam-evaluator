@@ -22,13 +22,13 @@ def load_header_patterns():
     """加载表头匹配模式"""
     patterns = {
         'question_type': ['题型', '题目类型', 'type', '类别'],
-        'stem': ['题干', '题目内容', '题目', 'stem', '内容'],
         'answer': ['正确答案', '答案', 'answer', '标准答案'],
         'difficulty': ['难度', 'difficulty', '难易','难易程度'],
         'explanation': ['解析', 'explanation', '题目解析', '答案解析'],
         # 选项列将在 auto_detect_columns 中通过正则动态匹配
         'score': ['分值', 'score', '分数', '得分'],
         'knowledge_point': ['知识点', '考核点', '考点'],
+        'stem': ['题干', '题目内容', '题目', 'stem', '内容'],
     }
     return patterns
 

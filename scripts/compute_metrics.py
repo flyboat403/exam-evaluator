@@ -339,10 +339,12 @@ def validate_basic_format(questions):
             issues.append({"question_id": qid, "issue_type": "empty_value", "description": f"第{qid}题答案为空"})
         if not stem.strip():
             issues.append({"question_id": qid, "issue_type": "empty_value", "description": f"第{qid}题题干为空"})
-        for i, opt in enumerate(options):
-            if not opt.strip():
-                opt_label = chr(ord('A') + i)
-                issues.append({"question_id": qid, "issue_type": "empty_value", "description": f"第{qid}题选项{opt_label}为空"})
+        # Skip option empty check for non-multiple-choice types (判断题, 填空题, etc.)
+        if qtype in ("选择题",):
+            for i, opt in enumerate(options):
+                if not opt.strip():
+                    opt_label = chr(ord('A') + i)
+                    issues.append({"question_id": qid, "issue_type": "empty_value", "description": f"第{qid}题选项{opt_label}为空"})
 
         # 2. 选项重复检测
         seen_options = {}
@@ -377,6 +379,7 @@ def validate_basic_format(questions):
         stem_stripped = stem.strip()
         if stem_stripped:
             last_char = stem_stripped[-1]
+            # 选择题/简答题要求以问号结尾
             if qtype in ("选择题", "简答题"):
                 if last_char not in ("？", "?"):
                     issues.append({
@@ -385,7 +388,8 @@ def validate_basic_format(questions):
                         "description": f"第{qid}题题干末尾应为问号"
                     })
             else:
-                if last_char not in ("。", "？", "?", "！", "…", ")", "）"):
+                # 判断题/填空题等题干为陈述句，允许句号等结尾
+                if last_char not in ("。", "？", "?", "！", "…", ")", "）", "、", ".", " ", ""):
                     issues.append({
                         "question_id": qid,
                         "issue_type": "stem_end_punctuation",
