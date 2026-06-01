@@ -275,8 +275,9 @@ def generate_html(metrics, evaluation, duplicates=None, compare=None, weights_pr
         html += '<div class="word-cloud">'
         knowledge_points_summary = evaluation.get("knowledge_points_summary", {})
         if knowledge_points_summary:
-            max_count = max(knowledge_points_summary.values()) if knowledge_points_summary else 1
-            for kp, count in sorted(knowledge_points_summary.items(), key=lambda x: -x[1])[:20]:
+            numeric_items = {k: v for k, v in knowledge_points_summary.items() if isinstance(v, (int, float))}
+            max_count = max(numeric_items.values()) if numeric_items else 1
+            for kp, count in sorted(numeric_items.items(), key=lambda x: -x[1])[:20]:
                 size = 12 + (count / max_count) * 24
                 opacity = 0.4 + (count / max_count) * 0.6
                 color = f"rgba(59, 130, 246, {opacity})"
@@ -296,8 +297,9 @@ def generate_html(metrics, evaluation, duplicates=None, compare=None, weights_pr
         knowledge_points_summary = evaluation.get("knowledge_points_summary", {})
         html += '<div class="word-cloud">'
         if knowledge_points_summary:
-            max_count = max(knowledge_points_summary.values()) if knowledge_points_summary else 1
-            for kp, count in sorted(knowledge_points_summary.items(), key=lambda x: -x[1])[:20]:
+            numeric_items = {k: v for k, v in knowledge_points_summary.items() if isinstance(v, (int, float))}
+            max_count = max(numeric_items.values()) if numeric_items else 1
+            for kp, count in sorted(numeric_items.items(), key=lambda x: -x[1])[:20]:
                 size = 12 + (count / max_count) * 24
                 opacity = 0.4 + (count / max_count) * 0.6
                 color = f"rgba(59, 130, 246, {opacity})"
