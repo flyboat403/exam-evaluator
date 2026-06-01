@@ -7,6 +7,7 @@ import sys
 import json
 import math
 from collections import defaultdict, Counter
+import re
 
 
 def compute_char_length(text):
@@ -239,6 +240,182 @@ def compute_all_level_metrics(questions, planned_difficulty=None, planned_total=
     }
 
 
+# Common Chinese typo detection patterns
+# Format: (compiled_regex, description)
+# Patterns match contexts where characters are likely misused
+_TYPO_PATTERNS = [
+    # 的/地/得 misuse
+    (re.compile(r'地[的书本知识问题事]'), "「地」后接名词性词语，可能应为「的」"),
+    (re.compile(r'的[做说写看读选画提]'), "「的」后接动词，可能应为「地」"),
+    (re.compile(r'得[的书]'), "「得」后接名词，可能应为「的」"),
+    # 在/再 misuse
+    (re.compile(r'在[次度回遍趟]'), "「在」后接动量词，可能应为「再」"),
+    (re.compile(r'再[此这里那儿]'), "「再」后接指代处所，可能应为「在」"),
+    # 其/齐
+    (re.compile(r'其[全整]'), "「其全/其整」可能应为「齐全/齐整」"),
+    # 已/己
+    (re.compile(r'自[已]'), "「自己」可能误写为「自已」"),
+    # 做/作
+    (re.compile(r'做[用法品者]'), "「做」用于抽象事物，可能应为「作」"),
+    (re.compile(r'作[事活儿]'), "「作」用于具体事务，可能应为「做」"),
+    # 象/像
+    (re.compile(r'好[象]'), "「好象」应为「好像」"),
+    # 侯/候
+    (re.compile(r'时[侯]'), "「时候」可能误写为「时侯」"),
+    (re.compile(r'[问等]侯'), "「问候/等候」可能误写为「问侯/等侯」"),
+    # 历/励/厉
+    (re.compile(r'[严]历'), "「严厉」可能误写为「严历」"),
+    # 既/即
+    (re.compile(r'既[使便]'), "「既使/既便」可能应为「即使/即便」"),
+    (re.compile(r'即[然]'), "「即然」可能应为「既然」"),
+    # 却/确
+    (re.compile(r'却[认定实]'), "「却认/却定/却实」可能应为「确认/确定/确实」"),
+    # 坐/座
+    (re.compile(r'坐[位次席]'), "「坐位/坐次/坐席」可能应为「座位/座次/座席」"),
+    (re.compile(r'座[下落]'), "「座下/座落」可能应为「坐下/坐落」"),
+    # 带/戴
+    (re.compile(r'带[帽罩链]'), "「带帽/带罩/带链」可能应为「戴帽/戴罩/戴链」"),
+    # 燥/躁
+    (re.compile(r'[烦暴]燥'), "「烦躁/暴燥」可能应为「烦躁/暴躁」"),
+    (re.compile(r'[干]躁'), "「干燥」可能误写为「干躁」"),
+    # 尤/由
+    (re.compile(r'尤[于如]'), "「尤于/尤如」可能应为「由于/犹如」"),
+    (re.compile(r'由[其]'), "「由其」可能应为「尤其」"),
+    # 须/需
+    (re.compile(r'必[需]'), "「必需」在非名词语境可能应为「必须」"),
+    # 常/长
+    (re.compile(r'非[长]'), "「非常」中的「长」正确"),
+    # 那/哪
+    (re.compile(r'那[里个]'), "「那里/那个」在疑问语气中可能应为「哪里/哪个」"),
+    # 吗/嘛
+    (re.compile(r'嘛[？。，]'), "「嘛」用于陈述句，疑问句尾应使用「吗」"),
+    # 止/只
+    (re.compile(r'止[要好有]'), "「止要/止好/止有」可能应为「只要/只好/只有」"),
+    (re.compile(r'只[步]'), "「只步」可能应为「止步」"),
+    # 只/支
+    (re.compile(r'[进开]只'), "「进只/开只」可能应为「进支/开支」"),
+    # 窜/蹿
+    (re.compile(r'窜[升改逃]'), "「窜升/窜改」可能应为「蹿升/窜改」"),
+    # 撒/洒
+    (re.compile(r'撒[水泪]'), "「撒水/撒泪」可能应为「洒水/洒泪」"),
+    (re.compile(r'洒[谎野]'), "「洒谎/洒野」可能应为「撒谎/撒野」"),
+    # 进/近
+    (re.compile(r'进[年来日]'), "「进年/进日」可能应为「近年/近日」"),
+    # 像/向
+    (re.compile(r'像[前左右]'), "「像前/像左/像右」可能应为「向前/向左/向右」"),
+    # 倍/备
+    (re.compile(r'倍[受感加]'), "「倍受/倍感/倍加」可能应为「备受/倍感/倍加」"),
+]
+
+
+def _detect_typos(text):
+    """扫描文本中的常见错别字"""
+    if not text:
+        return []
+    results = []
+    for pattern, desc in _TYPO_PATTERNS:
+        if pattern.search(text):
+            results.append(desc)
+    return results
+
+
+def validate_basic_format(questions):
+    """检查试题基本格式规范，返回问题列表
+
+    检测维度：空值检测、选项重复检测、标点规范检测、
+              题干末尾标点、答案范围检测、常见错别字检测
+    """
+    issues = []
+
+    for q in questions:
+        qid = q.get("id", 0)
+        qtype = q.get("question_type", "未知")
+        stem = q.get("stem", "") or ""
+        answer = q.get("answer", "") or ""
+        options = q.get("options", []) or []
+
+        # 1. 空值检测
+        if not answer.strip():
+            issues.append({"question_id": qid, "issue_type": "empty_value", "description": f"第{qid}题答案为空"})
+        if not stem.strip():
+            issues.append({"question_id": qid, "issue_type": "empty_value", "description": f"第{qid}题题干为空"})
+        for i, opt in enumerate(options):
+            if not opt.strip():
+                opt_label = chr(ord('A') + i)
+                issues.append({"question_id": qid, "issue_type": "empty_value", "description": f"第{qid}题选项{opt_label}为空"})
+
+        # 2. 选项重复检测
+        seen_options = {}
+        for i, opt in enumerate(options):
+            stripped = opt.strip()
+            if stripped:
+                if stripped in seen_options:
+                    opt_label = chr(ord('A') + i)
+                    prev_label = chr(ord('A') + seen_options[stripped])
+                    issues.append({
+                        "question_id": qid,
+                        "issue_type": "duplicate_options",
+                        "description": f"第{qid}题选项{opt_label}与选项{prev_label}内容重复"
+                    })
+                else:
+                    seen_options[stripped] = i
+
+        # 3. 标点规范检测
+        combined = stem + " " + " ".join(options)
+        if re.search(r'[\u4e00-\u9fff]', combined):  # 有中文内容
+            half_width = re.findall(r'[,.;:]', combined)
+            if half_width:
+                unique_punct = set(half_width)
+                punct_display = " ".join(f"「{p}」" for p in sorted(unique_punct))
+                issues.append({
+                    "question_id": qid,
+                    "issue_type": "punctuation_error",
+                    "description": f"第{qid}题存在半角标点：{punct_display}，建议使用全角标点"
+                })
+
+        # 4. 题干末尾标点
+        stem_stripped = stem.strip()
+        if stem_stripped:
+            last_char = stem_stripped[-1]
+            if qtype in ("选择题", "简答题"):
+                if last_char not in ("？", "?"):
+                    issues.append({
+                        "question_id": qid,
+                        "issue_type": "stem_end_punctuation",
+                        "description": f"第{qid}题题干末尾应为问号"
+                    })
+            else:
+                if last_char not in ("。", "？", "?", "！", "…", ")", "）"):
+                    issues.append({
+                        "question_id": qid,
+                        "issue_type": "stem_end_punctuation",
+                        "description": f"第{qid}题题干末尾缺少合适标点"
+                    })
+
+        # 5. 答案范围检测（选择题）
+        if qtype == "选择题" and options:
+            ans = answer.strip().upper()
+            if ans and len(ans) >= 1:
+                valid_letters = [chr(ord('A') + i) for i in range(len(options))]
+                if ans[0] not in valid_letters:
+                    issues.append({
+                        "question_id": qid,
+                        "issue_type": "answer_range",
+                        "description": f"第{qid}题答案「{ans}」超出选项范围（{len(options)}个选项：{'-'.join(valid_letters)}）"
+                    })
+
+        # 6. 常见错别字检测
+        typo_results = _detect_typos(stem)
+        for desc in typo_results:
+            issues.append({
+                "question_id": qid,
+                "issue_type": "typo",
+                "description": f"第{qid}题{desc}"
+            })
+
+    return issues
+
+
 def compute_metrics(questions_data, planned_difficulty=None, planned_total=None):
     """主函数：计算所有指标"""
     questions = questions_data.get("questions", [])
@@ -285,11 +462,15 @@ def compute_metrics(questions_data, planned_difficulty=None, planned_total=None)
             "cognitive_distribution": dict(cognitive_dist),
         }
 
+    # 格式规范检查
+    format_validation = validate_basic_format(questions)
+
     return {
         "basic_info": basic_info,
         "per_type_metrics": per_type_metrics,
         "question_features": question_features,
         "all_level_metrics": all_level_metrics,
+        "format_validation": format_validation,
     }
 
 
