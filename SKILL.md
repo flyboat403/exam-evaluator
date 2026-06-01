@@ -65,7 +65,33 @@ version: 1.3.0
    - 无法归类时用"综合应用"
 7. 低置信度题型标记"待确认"，无法识别的题跳过（不要编造）
 
-**输出格式**：标准 clean JSON，包含 `metadata`（title/total_score/source_type）、`parse_quality`（high/medium/low）、`questions` 数组（每题含 id、question_type、stem、options、answer、explanation、score、knowledge_point、cognitive_level、difficulty、confidence）。
+**内容质量验证（MANDATORY）**：
+
+1. Agent MUST 逐题验证答案与题干逻辑一致性：
+   - 检查答案是否实际回应题干提问内容
+   - 多选题：确认正确选项存在且选项内容合理（非空/非占位符）
+   - 记录结果至 clean.json `answer_verified` 字段：`"verified"` | `"suspicious"` | `"unverifiable"`
+
+2. Agent MUST 检查题干语言文字质量：
+   - 标记错别字、语法错误、歧义表述
+   - 记录问题至 clean.json `linguistic_issues` 字段（字符串数组，无问题则为 `[]`）
+
+3. Agent MUST 检查内容对齐性：
+   - 确认答案内容确实属于本题（而非错位粘贴到其他题目）
+   - 确认选项主题与题干相关
+   - 记录问题至 clean.json `content_alignment` 字段（字符串数组，无问题则为 `[]`）
+
+4. ⚠️ **GUARDRAIL**：Agent MUST NOT 自行判定答案为"错误"（`verified_wrong`），最高判定为 `"suspicious"`。最终验证由 Phase 7 完成。
+
+**新增字段说明：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `answer_verified` | string | ✅ | `"verified"` \| `"suspicious"` \| `"unverifiable"` — Agent 对答案正确性的判断 |
+| `linguistic_issues` | array | ✅ | 语言文字问题列表，如 `["第3题题干存在歧义表述", "第5题出现错别字"]`，无问题则为 `[]` |
+| `content_alignment` | array | ✅ | 内容错位问题列表，如 `["第2题答案与题干主题不一致"]`，无问题则为 `[]` |
+
+**输出格式**：标准 clean JSON，包含 `metadata`（title/total_score/source_type）、`parse_quality`（high/medium/low）、`questions` 数组（每题含 id、question_type、stem、options、answer、explanation、score、knowledge_point、cognitive_level、difficulty、confidence、answer_verified、linguistic_issues、content_alignment）。
 
 ### Phase 2+ 输出质量自动验证（Word/PDF 路径必须执行）
 
@@ -128,6 +154,9 @@ version: 1.3.0
 - **难度控制**：真正理解的学生 vs 死记硬背的学生，得分差异会明显吗？
 - **区分度潜力**：每道题都有明确的区分意图吗？还是只是"送分题"？
 - **规范性**：题干表述有歧义吗？解析质量能帮助学生理解错误原因吗？
+- **答案一致性**：每道题的答案真的回答了那个问题吗？是否有答非所问？
+- **语言文字质量**：题干表述是否存在错别字、语病或标点问题？
+- **内容错位**：是否有答案不属于本题、选项内容与题干无关的情况？
 
 **MANDATORY - READ ENTIRE FILE**: 评分前 MUST 完整读取
 [`references/evaluation_criteria.md`](references/evaluation_criteria.md)（51 行），严格按 10 分制细则评分。
@@ -147,11 +176,17 @@ version: 1.3.0
 **五维度：**
 | 维度 | 默认权重 | 评分要点 |
 |------|----------|----------|
-| 内容效度 | 25% | 考点覆盖、考纲匹配、认知层级分布 |
+| 内容效度 | 25% | 考点覆盖、考纲匹配、认知层级分布、答案与题干一致性、内容错位检测 |
 | 结构效度 | 20% | 答案分布、选项设计、干扰项质量 |
 | 难度控制 | 20% | 低中高比例、难度梯度 |
 | 区分度潜力 | 15% | 区分不同水平学生、干扰项有效性 |
-| 规范性 | 20% | 格式统一、题干清晰、解析质量、无重复 |
+| 规范性 | 20% | 格式统一、题干清晰、解析质量、无重复、语言文字质量（错别字、语病、标点规范） |
+
+**内容验证评分要点（Agent MUST 参考 clean.json 中的验证字段）：**
+- `answer_verified: "suspicious"` 的题目：内容效度自动扣 1 分/题
+- `linguistic_issues` 非空：规范性扣分 0.5 分/题（最多扣 3 分）
+- `content_alignment` 非空：内容效度扣分 1 分/题
+- 跨题答案矛盾：发现后每题在内容效度中扣 1-2 分
 
 **评分规则：**
 - 每题/全卷 五个维度各评 1-10 分
