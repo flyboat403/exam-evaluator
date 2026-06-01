@@ -26,7 +26,7 @@ python scripts/parse_excel.py <file.xlsx> temp/clean.json [--confirm]
 python scripts/parse_docx.py <file.docx> temp/raw.json
 python scripts/parse_pdf.py <file.pdf> temp/raw.json
 
-# Metrics calculation (after clean.json exists)
+# Metrics calculation (after clean.json exists) — outputs metrics.json with format_validation field
 python scripts/compute_metrics.py temp/clean.json temp/metrics.json
 python scripts/detect_duplicates.py temp/clean.json --output temp/duplicates.json
 
@@ -46,6 +46,8 @@ python scripts/validate_evaluation.py temp/evaluation.json [--mode overall|per_q
   - 题号重置: "第1题" appears more than once, or numbering restarts (如"一、选择题"后又出现"一、选择题")
   - 科目变化: Different subject names in headers (如"语文试卷" vs "数学试卷")
   - 分隔线: Clear section dividers like "第X页 共Y页" reset, or "--- 试卷B ---" markers
+- **Agent MUST NOT independently set answer as verified_wrong** — maximum judgment is "suspicious" — final verification happens in Phase 7
+- **Content validation layering**: Script-level checks (compute_metrics.py format_validation) → Agent-level checks (Phase 2 answer_verified/linguistic_issues/content_alignment) → Verification (Phase 7 cross-check)
 
 ## Output Locations
 
@@ -56,7 +58,7 @@ python scripts/validate_evaluation.py temp/evaluation.json [--mode overall|per_q
 
 | File | When to Load | Do NOT Load |
 |------|-------------|-------------|
-| `references/evaluation_criteria.md` | **ALWAYS** before scoring | Never skip — mandatory for scoring |
+| `references/evaluation_criteria.md` | **ALWAYS** before scoring (now includes 语言文字质量, 内容一致性, 跨题一致性 sub-dimensions) | Never skip — mandatory for scoring |
 | `references/bloom_taxonomy.md` | User requests cognitive level analysis | All objective questions (选择/判断/填空) or no cognitive analysis needed |
 | `references/question_types.md` | Contains subjective questions (简答/论述/案例分析) | All objective questions (选择/判断/填空) |
 | `references/vocational_standards.md` | Explicit vocational/对口升学 exam | Non-vocational exam context |
