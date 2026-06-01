@@ -336,6 +336,32 @@ python scripts/validate_evaluation.py temp/evaluation.json [--mode overall|per_q
 test -f output/report.html && echo "✅ report.html 存在" || echo "❌ 缺失"
 ```
 
+**2.5. 内容验证检查**：
+
+读取 `temp/metrics.json` 的 `format_validation` 字段和 `temp/clean.json` 的验证字段，执行以下检查：
+
+1. **格式问题联动检查**：
+   - 遍历 `format_validation` 中的每个 issue
+   - 检查该 issue 是否在 `evaluation.json` 的 `weaknesses` 或 `suggestions` 中得到回应
+   - 未被回应的格式问题 MUST 生成新增建议项：
+     ```
+     suggestion: { "priority": "P1", "title": "修复格式问题", "description": "..." }
+     ```
+
+2. **可疑答案审查**：
+   - 读取 `temp/clean.json`，检查 `questions` 数组中 `answer_verified` 为 `"suspicious"` 的题目
+   - 如有 suspicious 条目，在 Phase 7 输出中列出：
+     ```
+     ⚠️ 发现 N 题答案标记为 suspicious，建议人工复核：
+       - 第X题：题干摘要...
+       - 第Y题：题干摘要...
+     ```
+   - 确认这些题目已在 evaluation 的 `weaknesses` 中得到回应（如"第X题答案存疑"）
+
+3. **内容错位检查**（如有 `content_alignment` 非空题目）：
+   - 确认对应题目在 evaluation 的 `weaknesses` 中有对应项
+   - 未被回应的错位问题 MUST 生成建议项
+
 **2. 手动验证**：
 - [ ] 五个维度均有评分（1-10），综合评分计算正确（短板机制）
 - [ ] HTML 文件可打开，图表（雷达图/饼图/柱状图/词云）正常渲染
