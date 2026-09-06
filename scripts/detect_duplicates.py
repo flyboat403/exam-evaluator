@@ -6,10 +6,10 @@ L2: 输出疑似重复对，供 Agent 语义复核
 Usage: python detect_duplicates.py <clean_questions.json> [--threshold 0.85]
 Output: 输出 JSON 文件，包含疑似重复对
 """
-import sys
-import json
 import argparse
+import json
 from collections import defaultdict
+from pathlib import Path
 
 
 def ngram_chars(text, n=3):
@@ -32,31 +32,56 @@ def jaccard_similarity(s1, s2):
 
 
 def detect_duplicates_l1(questions_by_type, threshold=0.85):
-    """L1: Jaccard 快速检测"""
+    """L1: Jaccard 快速检测（倒排索引分块，避免 O(n²) 全对比较）
+
+    思路：只有共享至少一个 n-gram 的题目才可能相似，
+    先用 {n-gram: 题目索引} 倒排索引生成候选对，再对候选对计算精确 Jaccard。
+    候选对生成前先按 n-gram 集合大小做长度预过滤（大小悬殊的对不可能过阈值）。
+    """
     duplicate_pairs = []
 
     for qtype, questions in questions_by_type.items():
-        n = len(questions)
-        for i in range(n):
-            for j in range(i + 1, n):
-                q1 = questions[i]
-                q2 = questions[j]
-                stem1 = q1.get("stem", "")
-                stem2 = q2.get("stem", "")
+        stems = [q.get("stem", "") for q in questions]
+        grams = [ngram_chars(s, n=3) for s in stems]
 
-                similarity = jaccard_similarity(stem1, stem2)
-                if similarity >= threshold:
-                    duplicate_pairs.append({
-                        "type": "jaccard",
-                        "question_1_id": q1.get("id", ""),
-                        "question_2_id": q2.get("id", ""),
-                        "question_type": qtype,
-                        "similarity": round(similarity, 3),
-                        "stem_1_preview": stem1[:50],
-                        "stem_2_preview": stem2[:50],
-                        "confidence": "high",
-                    })
+        # 长度预过滤：|A|/max(|B|,1) < threshold 恒不可能达到 Jaccard 阈值
+        sizes = [len(g) for g in grams]
 
+        # 倒排索引：候选对 = 共享 ≥1 个 n-gram 的题目对
+        inverted = defaultdict(set)
+        for i, gs in enumerate(grams):
+            for g in gs:
+                inverted[g].add(i)
+
+        candidates = set()
+        for idxs in inverted.values():
+            if len(idxs) < 2:
+                continue
+            idxs = sorted(idxs)
+            for a_i in range(len(idxs)):
+                for b_i in range(a_i + 1, len(idxs)):
+                    a, b = idxs[a_i], idxs[b_i]
+                    if sizes[a] == 0 or sizes[b] == 0:
+                        continue
+                    if min(sizes[a], sizes[b]) / max(sizes[a], sizes[b]) < threshold:
+                        continue
+                    candidates.add((a, b))
+
+        for a, b in candidates:
+            similarity = jaccard_similarity(stems[a], stems[b])
+            if similarity >= threshold:
+                duplicate_pairs.append({
+                    "type": "jaccard",
+                    "question_1_id": questions[a].get("id", ""),
+                    "question_2_id": questions[b].get("id", ""),
+                    "question_type": qtype,
+                    "similarity": round(similarity, 3),
+                    "stem_1_preview": stems[a][:50],
+                    "stem_2_preview": stems[b][:50],
+                    "confidence": "high",
+                })
+
+    duplicate_pairs.sort(key=lambda p: -p["similarity"])
     return duplicate_pairs
 
 
@@ -96,7 +121,9 @@ def main():
 
     result = detect_duplicates(questions_data, args.threshold)
 
-    output_path = args.output or args.input.replace(".json", "_duplicates.json")
+    output_path = args.output or str(
+        Path(args.input).with_name(Path(args.input).stem + "_duplicates.json")
+    )
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 

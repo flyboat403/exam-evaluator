@@ -6,12 +6,12 @@
 用法:
     python scripts/parse_excel.py <input_file> <output_json> [--confirm]
 """
-import sys
-import json
 import argparse
+import json
 import re
-from pathlib import Path
+import sys
 from collections import Counter
+from pathlib import Path
 
 # 确保 Windows 控制台 UTF-8 输出
 if sys.platform == 'win32':
@@ -73,18 +73,40 @@ def detect_file_type(file_path):
     else:
         raise ValueError(f"不支持的文件格式: {ext}")
 
-def read_excel(file_path):
-    """读取 Excel 文件所有工作表，返回 (headers, rows)"""
+def is_header_row(row, patterns):
+    """判断某行是否为表头行（匹配 ≥2 个非选项字段关键词，或 ≥3 个含选项列）
+
+    用于多 sheet 合并场景：每个 sheet 的表头独立识别，而非仅取首个非空行。
+    """
+    field_hits = 0
+    option_hits = 0
+    opt_re = re.compile(r'^(?:选项\s*)?[A-Z](?:\s*选项)?$', re.IGNORECASE)
+    for cell in row:
+        if cell is None:
+            continue
+        text = str(cell)
+        if match_header(text, patterns):
+            field_hits += 1
+        elif opt_re.match(text.strip()):
+            option_hits += 1
+    return field_hits >= 2 or (field_hits >= 1 and option_hits + field_hits >= 5)
+
+def read_excel(file_path, patterns):
+    """读取 Excel 文件所有工作表，返回 (headers, rows)
+
+    每个 sheet 独立检测表头行（is_header_row），避免多 sheet 表头列序
+    不一致时静默错位；表头行从数据行中剔除。
+    """
     file_type = detect_file_type(file_path)
-    
-    all_rows = []
+
+    sheet_data = []  # [(sheet_name, rows), ...]
     if file_type == 'openpyxl':
         import openpyxl
         wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
         for ws in wb.worksheets:
             rows = list(ws.iter_rows(values_only=True))
             if rows:
-                all_rows.extend(rows)
+                sheet_data.append((ws.title, rows))
     elif file_type == 'xlrd':
         import xlrd
         wb = xlrd.open_workbook(file_path)
@@ -92,17 +114,37 @@ def read_excel(file_path):
             ws = wb.sheet_by_index(i)
             rows = [ws.row_values(j) for j in range(ws.nrows)]
             if rows:
-                all_rows.extend(rows)
+                sheet_data.append((wb.sheet_names()[i], rows))
     else:
         raise ValueError(f"未知文件类型: {file_type}")
-    
-    if not all_rows:
+
+    if not sheet_data:
         raise ValueError("Excel 文件为空")
-    
-    # 使用第一个非空行作为表头
-    headers = all_rows[0]
-    data_rows = all_rows[1:]
-    return headers, data_rows
+
+    # 逐 sheet 剥离表头行；后续 sheet 的表头必须与首个表头一致（防列错位）
+    headers = None
+    all_rows = []
+    for sheet_name, rows in sheet_data:
+        if headers is None:
+            candidates = [i for i, r in enumerate(rows) if is_header_row(r, patterns)]
+            if not candidates:
+                raise ValueError(f"sheet '{sheet_name}' 未检测到表头行")
+            headers = rows[candidates[0]]
+            header_start = candidates[0]
+            all_rows.extend(rows[header_start + 1:])
+            continue
+        for r in rows:
+            if is_header_row(r, patterns):
+                if [str(c).strip() if c is not None else '' for c in r] != \
+                   [str(h).strip() if h is not None else '' for h in headers]:
+                    print(f"⚠️ sheet '{sheet_name}' 表头列结构与首个 sheet 不一致，已跳过该行并告警")
+                continue
+            all_rows.append(r)
+
+    if not all_rows:
+        raise ValueError("Excel 文件无有效数据行")
+
+    return headers, all_rows
 
 def normalize_answer(answer, question_type):
     """标准化答案格式"""
@@ -110,8 +152,15 @@ def normalize_answer(answer, question_type):
         return ''
     answer = str(answer).strip()
     if question_type == '判断题':
-        mapping = {'A': '正确', 'B': '错误', '正确': '正确', '错误': '错误', '对': '正确', '错': '错误', 'T': '正确', 'F': '错误'}
-        return mapping.get(answer.upper(), answer)
+        s = answer.upper()
+        mapping = {
+            'A': '正确', 'B': '错误', '正确': '正确', '错误': '错误',
+            '对': '正确', '错': '错误', 'T': '正确', 'F': '错误',
+            'TRUE': '正确', 'FALSE': '错误', '√': '正确', 'X': '错误',
+        }
+        if s == '×':
+            return '错误'
+        return mapping.get(s, answer)
     return answer
 
 def detect_question_type(raw_type):
@@ -122,9 +171,7 @@ def detect_question_type(raw_type):
     # 过滤表头行（多表合并时可能混入）
     if '必填' in raw or '题型' == raw or raw.startswith('题型'):
         return '未知'
-    if '单选' in raw:
-        return '选择题'
-    elif '多选' in raw:
+    if '单选' in raw or '多选' in raw:
         return '选择题'
     elif '判断' in raw:
         return '判断题'
@@ -149,14 +196,14 @@ def normalize_difficulty(raw_diff):
         return '低'
     elif diff in ('理解', '中等', '中', '一般','middle'):
         return '中'
-    elif diff in ('应用', '较难', '高', '掌握', '困难','high'):
+    elif diff in ('应用', '较难', '高', '掌握', '困难','high','难'):
         return '高'
     return '中'
 
 def parse_excel(file_path, output_path, confirm=False):
     """主解析函数"""
     patterns = load_header_patterns()
-    headers, data_rows = read_excel(file_path)
+    headers, data_rows = read_excel(file_path, patterns)
     
     # 自动检测列映射
     col_mapping = auto_detect_columns(headers, patterns)

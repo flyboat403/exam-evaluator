@@ -8,11 +8,12 @@
 
 输出：交互式 HTML 报告（Chart.js 图表 + 交互表格 + 导出 CSV）
 """
-import sys
-import json
 import argparse
+import json
 import os
+import sys
 from datetime import datetime
+from html import escape as html_escape
 
 
 def load_json(path):
@@ -20,6 +21,23 @@ def load_json(path):
         return None
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def render_word_cloud(knowledge_points_summary):
+    """渲染知识点词云 HTML（供有/无选择题两个分支复用）"""
+    out = '<div class="word-cloud">'
+    if knowledge_points_summary:
+        numeric_items = {k: v for k, v in knowledge_points_summary.items() if isinstance(v, (int, float))}
+        max_count = max(numeric_items.values()) if numeric_items else 1
+        for kp, count in sorted(numeric_items.items(), key=lambda x: -x[1])[:20]:
+            size = 12 + (count / max_count) * 24
+            opacity = 0.4 + (count / max_count) * 0.6
+            color = f"rgba(59, 130, 246, {opacity})"
+            out += f'<span style="font-size:{size}px;color:{color};font-weight:600;">{html_escape(str(kp))}</span>\n'
+    else:
+        out += '<p style="color:var(--text-muted);font-size:13px;">暂无关键词数据</p>'
+    out += '</div>'
+    return out
 
 
 def generate_html(metrics, evaluation, duplicates=None, compare=None, weights_profile=None):
@@ -271,20 +289,7 @@ def generate_html(metrics, evaluation, duplicates=None, compare=None, weights_pr
         html += """</div>
       <div class="chart-box"><h3>知识点分布词云</h3>
 """
-        # 词云图 - 从 evaluation 的 knowledge_points_summary 中提取
-        html += '<div class="word-cloud">'
-        knowledge_points_summary = evaluation.get("knowledge_points_summary", {})
-        if knowledge_points_summary:
-            numeric_items = {k: v for k, v in knowledge_points_summary.items() if isinstance(v, (int, float))}
-            max_count = max(numeric_items.values()) if numeric_items else 1
-            for kp, count in sorted(numeric_items.items(), key=lambda x: -x[1])[:20]:
-                size = 12 + (count / max_count) * 24
-                opacity = 0.4 + (count / max_count) * 0.6
-                color = f"rgba(59, 130, 246, {opacity})"
-                html += f'<span style="font-size:{size}px;color:{color};font-weight:600;">{kp}</span>\n'
-        else:
-            html += '<p style="color:var(--text-muted);font-size:13px;">暂无关键词数据（Phase 2 未统计知识点）</p>'
-        html += '</div>'
+        html += render_word_cloud(evaluation.get("knowledge_points_summary", {}))
 
         html += """</div>
     </div>
@@ -294,18 +299,7 @@ def generate_html(metrics, evaluation, duplicates=None, compare=None, weights_pr
         html += """    <div class="chart-row" style="margin-top:16px;">
       <div class="chart-box"><h3>知识点分布词云</h3>
 """
-        knowledge_points_summary = evaluation.get("knowledge_points_summary", {})
-        html += '<div class="word-cloud">'
-        if knowledge_points_summary:
-            numeric_items = {k: v for k, v in knowledge_points_summary.items() if isinstance(v, (int, float))}
-            max_count = max(numeric_items.values()) if numeric_items else 1
-            for kp, count in sorted(numeric_items.items(), key=lambda x: -x[1])[:20]:
-                size = 12 + (count / max_count) * 24
-                opacity = 0.4 + (count / max_count) * 0.6
-                color = f"rgba(59, 130, 246, {opacity})"
-                html += f'<span style="font-size:{size}px;color:{color};font-weight:600;">{kp}</span>\n'
-        else:
-            html += '<p style="color:var(--text-muted);font-size:13px;">暂无关键词数据</p>'
+        html += render_word_cloud(evaluation.get("knowledge_points_summary", {}))
         html += '</div></div></div>'
 
     html += """  </div>
@@ -317,11 +311,11 @@ def generate_html(metrics, evaluation, duplicates=None, compare=None, weights_pr
     if strengths:
         html += "    <h3 style='color:var(--green);margin-bottom:8px;'>✅ 优秀项</h3>\n"
         for s in strengths:
-            html += f"    <div class='strength-item'>{s}</div>\n"
+            html += f"    <div class='strength-item'>{html_escape(str(s))}</div>\n"
     if weaknesses:
         html += "    <h3 style='color:var(--red);margin:16px 0 8px;'>❌ 需改进项</h3>\n"
         for w in weaknesses:
-            html += f"    <div class='weakness-item'>{w}</div>\n"
+            html += f"    <div class='weakness-item'>{html_escape(str(w))}</div>\n"
     html += """  </div>
 
   <!-- 历史对比（如有） -->
@@ -362,7 +356,7 @@ def generate_html(metrics, evaluation, duplicates=None, compare=None, weights_pr
         score = overall_scores.get(dim, 0)
         w = weights.get(dim, 0)
         detail = dimension_details.get(dim, {}).get("evidence", "")
-        html += f"      <tr><td>{dim}</td><td>{score}</td><td>{w:.0%}</td><td>{score * w:.2f}</td><td>{detail}</td></tr>\n"
+        html += f"      <tr><td>{dim}</td><td>{score}</td><td>{w:.0%}</td><td>{score * w:.2f}</td><td>{html_escape(str(detail))}</td></tr>\n"
 
     html += f"""      <tr style="font-weight:700;background:#f1f5f9;">
         <td colspan="3">综合评分</td><td>{comprehensive_score:.1f}/10</td>
@@ -379,6 +373,7 @@ def generate_html(metrics, evaluation, duplicates=None, compare=None, weights_pr
       <button class="btn export-btn" onclick="exportCSV()">导出 CSV</button>
     </h2>
     <table id="questionTable">
+      <thead>
       <tr>
         <th class="sortable" onclick="sortTable(0)">#</th>
         <th class="sortable" onclick="sortTable(1)">题型</th>
@@ -390,6 +385,8 @@ def generate_html(metrics, evaluation, duplicates=None, compare=None, weights_pr
         <th class="sortable" onclick="sortTable(7)">规范性</th>
         <th class="sortable" onclick="sortTable(8)">总分</th>
       </tr>
+      </thead>
+      <tbody>
 """
         def cell_color(s):
             if s >= 8: return "cell-green"
@@ -398,21 +395,22 @@ def generate_html(metrics, evaluation, duplicates=None, compare=None, weights_pr
         for q in questions_eval:
             scores = q.get("scores", {})
             total = q.get("total_score", 0)
-            stem_summary = q.get('stem_summary', '')
+            stem_summary = str(q.get('stem_summary', ''))
             stem_preview = stem_summary[:30]
             html += f"""      <tr>
-        <td>{q.get('id', '')}</td>
-        <td>{q.get('question_type', '')}</td>
-        <td title="{stem_summary}">{stem_preview}...</td>
+        <td>{html_escape(str(q.get('id', '')))}</td>
+        <td>{html_escape(str(q.get('question_type', '')))}</td>
+        <td title="{html_escape(stem_summary)}">{html_escape(stem_preview)}</td>
         <td class="{cell_color(scores.get('内容效度', 0))}">{scores.get('内容效度', 0)}</td>
         <td class="{cell_color(scores.get('结构效度', 0))}">{scores.get('结构效度', 0)}</td>
         <td class="{cell_color(scores.get('难度控制', 0))}">{scores.get('难度控制', 0)}</td>
         <td class="{cell_color(scores.get('区分度潜力', 0))}">{scores.get('区分度潜力', 0)}</td>
         <td class="{cell_color(scores.get('规范性', 0))}">{scores.get('规范性', 0)}</td>
-        <td><strong>{total}</strong></td>
+        <td><strong>{html_escape(str(total))}</strong></td>
       </tr>
 """
-        html += """    </table>
+        html += """    </tbody>
+    </table>
   </div>
 """
 
@@ -425,9 +423,9 @@ def generate_html(metrics, evaluation, duplicates=None, compare=None, weights_pr
             priority = s.get("priority", "P2")
             badge_cls = f"badge-{priority.lower()}"
             html += f"""    <div class="suggestion-item">
-      <span class="badge {badge_cls}">{priority}</span>
-      <strong>{s.get("title", "")}</strong>
-      <p style="margin-top:4px;color:var(--text-muted);">{s.get("description", "")}</p>
+      <span class="badge {badge_cls}">{html_escape(str(priority))}</span>
+      <strong>{html_escape(str(s.get("title", "")))}</strong>
+      <p style="margin-top:4px;color:var(--text-muted);">{html_escape(str(s.get("description", "")))}</p>
     </div>
 """
         html += """  </div>

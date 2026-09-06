@@ -3,9 +3,9 @@
 使用 pdfplumber 提取每页文本内容，不做题型判断。
 附带 parse_quality 标注（高/中/低）。
 """
-import sys
 import json
 import re
+import sys
 
 try:
     import pdfplumber

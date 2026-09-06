@@ -59,6 +59,7 @@ python scripts/validate_evaluation.py temp/evaluation.json [--mode overall|per_q
 | File | When to Load | Do NOT Load |
 |------|-------------|-------------|
 | `references/evaluation_criteria.md` | **ALWAYS** before scoring (now includes 语言文字质量, 内容一致性, 跨题一致性 sub-dimensions) | Never skip — mandatory for scoring |
+| `references/evaluation_schema.md` | **ALWAYS** before writing evaluation.json (Phase 5 output contract) | Never skip — schema 键名错误导致报告静默置 0 |
 | `references/bloom_taxonomy.md` | User requests cognitive level analysis | All objective questions (选择/判断/填空) or no cognitive analysis needed |
 | `references/question_types.md` | Contains subjective questions (简答/论述/案例分析) | All objective questions (选择/判断/填空) |
 | `references/vocational_standards.md` | Explicit vocational/对口升学 exam | Non-vocational exam context |

@@ -1,6 +1,7 @@
-import sys
 import json
 import re
+import sys
+
 from docx import Document
 
 # 确保 Windows 控制台 UTF-8 输出
@@ -98,7 +99,7 @@ def main():
 
     print(f"✅ 解析完成: {len(result['paragraphs'])} 个段落 → {output_path}")
     print(f"   解析质量: {result['parse_quality']} - {result['parse_quality_note']}")
-    print(f"   提示: 请交由 Agent 进行结构化处理 → clean.json")
+    print("   提示: 请交由 Agent 进行结构化处理 → clean.json")
 
 if __name__ == "__main__":
     main()

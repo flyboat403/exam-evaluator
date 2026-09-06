@@ -1,6 +1,6 @@
 ---
 name: exam-evaluator
-description: "从 .xlsx/.xls/.docx/.pdf 试卷/题库中提取试题，从五个维度（内容效度、结构效度、难度控制、区分度潜力、规范性）评估命题质量，生成交互式 HTML 可视化报告。Use when: (1) 用户要求评估试卷或题库质量，(2) 命题后需要质量检验，(3) 对比多份试卷的命题水平，(4) 生成试题分析报告，(5) 用户上传 Excel/Word/PDF 文件要求分析。触发词：评估试卷、评估题库、试题质量、试卷分析、题库分析、命题质量、命题检验、exam evaluation、question quality assessment、.xlsx、.docx、.pdf"
+description: "从 .xlsx/.xls/.docx/.pdf 试卷/题库提取试题，按五维度（内容效度、结构效度、难度控制、区分度潜力、规范性）评估命题质量，生成交互式 HTML 报告。Use when: 评估试卷/题库质量、命题后检验、对比多份试卷、生成试题分析报告、上传 Excel/Word/PDF 试卷要求分析。触发词：评估试卷、评估题库、试题质量、试卷分析、题库分析、命题质量、命题检验、exam evaluation、question quality assessment"
 version: 1.3.0
 ---
 
@@ -159,7 +159,7 @@ version: 1.3.0
 - **内容错位**：是否有答案不属于本题、选项内容与题干无关的情况？
 
 **MANDATORY - READ ENTIRE FILE**: 评分前 MUST 完整读取
-[`references/evaluation_criteria.md`](references/evaluation_criteria.md)（51 行），严格按 10 分制细则评分。
+[`references/evaluation_criteria.md`](references/evaluation_criteria.md)（87 行），严格按 10 分制细则评分。
 
 **条件加载**：
 - 用户要求分析认知层级分布 → 读取 [`references/bloom_taxonomy.md`](references/bloom_taxonomy.md)（18 行）
@@ -192,6 +192,11 @@ version: 1.3.0
 - 每题/全卷 五个维度各评 1-10 分
 - **综合评分** = min(加权平均, 最低维度得分 + 2) — 短板机制
 - 列出优秀项、需改进项、具体建议（P0/P1/P2 优先级）
+
+**评分推理链示例**（evidence 必须"数据 → 证据 → 分数"三级推导，禁止只写结论）：
+
+> 结构效度 5 分：metrics 显示选择题 `option_completeness=0.4`（每题仅 2/5 选项填充）+ `std_dev=6.36` → 240 题实际为二选一而非四选一，干扰项数量不足；答案分布 A 17.1%/B 20.8% 虽未失衡（<35%），但 C/D 因选项为空导致有效区分力缺失 → 按评分细则"某选项占比偏离或干扰项多数无效"档，评 5 分。
+
 **评价模式差异：**
 - **整体模式**：全卷综合评分
 - **抽样模式**：分层抽取 5-10 题逐题评价，推导全卷
@@ -199,90 +204,10 @@ version: 1.3.0
 
 ### Phase 5 Output: evaluation.json Schema
 
-**MUST 严格按以下 Schema 输出，字段名必须完全匹配**（`generate_report.py` 按固定字段名读取，命名不一致将导致报告全部显示默认值/空白）：
+**MANDATORY - READ ENTIRE FILE**: 输出 evaluation.json 前 MUST 完整读取
+[`references/evaluation_schema.md`](references/evaluation_schema.md)（80 行），严格按其 Schema 输出，字段名必须完全匹配。
 
-```json
-{
-  "evaluation_mode": "overall",
-  "overall_scores": {
-    "内容效度": 7,
-    "结构效度": 6,
-    "难度控制": 8,
-    "区分度潜力": 5,
-    "规范性": 7
-  },
-  "dimension_details": {
-    "内容效度": { "evidence": "考点覆盖了教材核心章节，但缺少xxx知识点..." },
-    "结构效度": { "evidence": "选项分布基本均衡，但第5题最长选项偏差达40%..." },
-    "难度控制": { "evidence": "低:中:高≈3:5:2，难度梯度合理..." },
-    "区分度潜力": { "evidence": "多数题为记忆型，缺乏应用分析类题目..." },
-    "规范性": { "evidence": "格式统一，但第3题题干存在歧义..." }
-  },
-  "weights": {
-    "内容效度": 0.25,
-    "结构效度": 0.20,
-    "难度控制": 0.20,
-    "区分度潜力": 0.15,
-    "规范性": 0.20
-  },
-  "strengths": [
-    "难度梯度设计合理，低中高比例为3:5:2",
-    "选择题干扰项设计有效"
-  ],
-  "weaknesses": [
-    "判断题答案严重偏向'正确'（占比75%），不符合命题规范",
-    "缺少答案解析，规范性不足"
-  ],
-  "suggestions": [
-    {
-      "priority": "P0",
-      "title": "调整判断题答案分布",
-      "description": "将判断题正确/错误比例调整至接近1:1，避免答案一边倒"
-    },
-    {
-      "priority": "P1",
-      "title": "补充题目解析",
-      "description": "为每道题添加详细解析，解释正确选项的原因和干扰项的排除理由"
-    }
-  ],
-  "questions": [
-    {
-      "id": "1",
-      "question_type": "选择题",
-      "stem_summary": "下列关于xxx的说法正确的是",
-      "scores": {
-        "内容效度": 8,
-        "结构效度": 7,
-        "难度控制": 6,
-        "区分度潜力": 5,
-        "规范性": 8
-      },
-      "total_score": 6.7
-    }
-  ],
-  "knowledge_points_summary": {
-    "细胞结构": 3,
-    "光合作用": 2,
-    "遗传定律": 1
-  }
-}
-```
-
-**字段说明：**
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `evaluation_mode` | string | ✅ | `"overall"` / `"per_question"` / `"sampling"` |
-| `overall_scores` | object | ✅ | 五个维度各评 1-10 分，键名必须用中文全称 |
-| `dimension_details` | object | ✅ | 每维度含 `evidence` 字段，说明评分理由 |
-| `weights` | object | ✅ | 五维度权重，值之和为 1.0 |
-| `strengths` | array | ✅ | 优秀项列表，每项为字符串 |
-| `weaknesses` | array | ✅ | 需改进项列表，每项为字符串 |
-| `suggestions` | array | ✅ | 含 `priority`（P0/P1/P2）、`title`、`description` |
-| `questions` | array | 逐题/抽样模式 | 含 `id`, `question_type`, `stem_summary`（≤30字）, `scores`（五维度）, `total_score` |
-| `knowledge_points_summary` | object | ✅ | `{"知识点名称": 出现次数}`，用于词云图 |
-
-> ⚠️ 字段名拼写错误（如 `overall_scores` 写成 `overallScores`、`scores` 或 `dimension_scores`）将导致 `generate_report.py` 的 `.get()` 全部返回默认值，报告显示综合评分 0.0、图表空白。
+> ⚠️ **Do NOT 凭记忆写 Schema**：`generate_report.py` 按固定字段名（下划线命名 + 中文全维度键）读取，命名不一致将导致报告全部显示默认值/空白（综合评分 0.0、图表空白）。
 
 ### Phase 5+ evaluation.json Schema 校验（MUST 执行）
 
@@ -292,18 +217,9 @@ version: 1.3.0
 python scripts/validate_evaluation.py temp/evaluation.json [--mode overall|per_question|sampling]
 ```
 
-**校验内容**（脚本内置）：
-- `evaluation_mode` 有效性、"区分度"简写检测
-- `overall_scores` 五维度完整 + 值域 [1,10]
-- `weights` 键名与 `overall_scores` 一致 + 值之和 = 1.0
-- `dimension_details` 五维度含 `evidence`
-- `knowledge_points_summary` 非空
-- `suggestions` 子字段 (`priority`/`title`/`description`)
-- 逐题模式：`questions` 数组每项含 `id`/`scores`/`total_score`
-
-**校验结果**：
-- 输出 `✅ 全部校验通过` → 继续 Phase 6
-- 输出 `❌ 校验失败 — N 个错误` → Do NOT 继续 Phase 6。根据输出的具体失败项修正 evaluation.json 后重新运行脚本，直到通过。
+**校验内容**（7 项规则，详见脚本内置）→ **结果分支**：
+- ✅ 全部校验通过 → 继续 Phase 6
+- ❌ 校验失败 — N 个错误 → Do NOT 继续 Phase 6。按输出的具体失败项修正 evaluation.json 后重跑，直到通过。
 
 ### Phase 6: 报告生成
 
@@ -336,7 +252,7 @@ python scripts/validate_evaluation.py temp/evaluation.json [--mode overall|per_q
 test -f output/report.html && echo "✅ report.html 存在" || echo "❌ 缺失"
 ```
 
-**2.5. 内容验证检查**：
+**2. 内容验证检查**：
 
 读取 `temp/metrics.json` 的 `format_validation` 字段和 `temp/clean.json` 的验证字段，执行以下检查：
 
@@ -362,14 +278,14 @@ test -f output/report.html && echo "✅ report.html 存在" || echo "❌ 缺失"
    - 确认对应题目在 evaluation 的 `weaknesses` 中有对应项
    - 未被回应的错位问题 MUST 生成建议项
 
-**2. 手动验证**：
+**3. 手动验证**：
 - [ ] 五个维度均有评分（1-10），综合评分计算正确（短板机制）
 - [ ] HTML 文件可打开，图表（雷达图/饼图/柱状图/词云）正常渲染
 - [ ] 逐题表数据完整（逐题/抽样模式下 questions 列数与总题数一致）
 - [ ] 中文显示正常，无乱码
 - [ ] 无"0.0"综合评分、无空白图表区域
 
-**3. 验证失败处理**：
+**4. 验证失败处理**：
 - 自动化验证失败 → 回 Phase 5+ 修正后重新运行
 - 手动验证失败 → 回 Phase 6 修正报告生成
 
@@ -404,14 +320,13 @@ test -f output/report.html && echo "✅ report.html 存在" || echo "❌ 缺失"
 | 认知层级仅 1-2 层 | 在建议中明确指出，降低内容效度评分 |
 | 判断题答案一边倒 | P0 级问题，必须在 weaknesses 中突出显示 |
 | 无解析字段 | 规范性评分降至 3-4 分，建议补充解析 |
+| 评价模式/权重不一致 | evaluation_mode 与 questions 数组内容不匹配（如 mode="overall" 但有 questions 数据） |
+| 权重键名不一致 | weights 的键与 overall_scores 的键不完全匹配 → 某维度权重被静默置0 |
 
 ## 输出
 
 - 主文件：`output/report.html`（交互式可视化报告）
 - 可选：`output/逐题明细.csv`（从 HTML 导出按钮下载）
-
-| 评价模式/权重不一致 | evaluation_mode 与 questions 数组内容不匹配（如 mode="overall" 但有 questions 数据） |
-| 权重键名不一致 | weights 的键与 overall_scores 的键不完全匹配 → 某维度权重被静默置0 |
 
 ## 权重预设文件
 

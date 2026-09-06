@@ -3,11 +3,11 @@
 输入：clean JSON（Agent 识别后的结构化试题数据）
 输出：指标 JSON（含每题特征向量 + 各题型统计 + 全卷级指标）
 """
-import sys
 import json
 import math
-from collections import defaultdict, Counter
 import re
+import sys
+from collections import Counter, defaultdict
 
 
 def compute_char_length(text):
@@ -41,29 +41,39 @@ def check_correct_is_longest(answer, options):
 
 
 def compute_choice_metrics(questions):
-    """选择题专属指标"""
+    """选择题专属指标
+
+    支持任意数量选项列（A-Z），单选/多选分别统计。
+    option_completeness 按每题实际选项列数归一化（检测到的列中有内容比例）。
+    """
     if not questions:
         return None
 
-    answer_dist = Counter()
+    single_dist = Counter()   # 单选：单字母答案
+    multi_dist = Counter()    # 多选：多字母答案
     longest_correct_count = 0
     option_counts = []
     option_lengths = []
     missing_options = 0
+    completeness_sum = 0.0
 
     for q in questions:
         answer = q.get("answer", "").strip().upper()
         if answer:
-            answer_dist[answer] += 1
+            if len(answer) == 1:
+                single_dist[answer] += 1
+            else:
+                multi_dist[answer] += 1
 
-        # 选项长度分析
+        # 选项分析：以题目实际选项列数为准，不再假设恰好 4 列
         options = q.get("options", [])
-        if len(options) == 4:
-            lengths = [compute_char_length(opt) for opt in options]
-            option_lengths.append(lengths)
-            option_counts.append(len(options))
-        else:
+        if not options:
             missing_options += 1
+        else:
+            empty = sum(1 for opt in options if not str(opt).strip())
+            completeness_sum += (len(options) - empty) / len(options)
+            option_lengths.append([compute_char_length(opt) for opt in options])
+            option_counts.append(len(options))
 
         # 最长选项偏差
         if answer and options:
@@ -71,17 +81,29 @@ def compute_choice_metrics(questions):
                 longest_correct_count += 1
 
     total = len(questions)
-    answer_counts = [answer_dist.get(opt, 0) for opt in ['A', 'B', 'C', 'D']]
-    answer_ratios = [c / total if total > 0 else 0 for c in answer_counts]
+
+    # 单选分布统计：按实际出现的字母动态覆盖
+    single_letters = sorted(single_dist.keys())
+    answer_counts = [single_dist.get(letter, 0) for letter in single_letters]
+    single_total = sum(answer_counts)
+    answer_ratios = {
+        letter: (count / single_total) for letter, count in
+        zip(single_letters, answer_counts)
+    } if single_total > 0 else {}
     std_dev = compute_std_dev(answer_counts)
+
+    completeness = completeness_sum / total if total > 0 else 0
 
     return {
         "total": total,
-        "answer_distribution": dict(answer_dist),
-        "answer_ratios": {k: round(v, 3) for k, v in zip(['A', 'B', 'C', 'D'], answer_ratios)},
+        "single_count": single_total,
+        "multi_count": total - single_total,
+        "answer_distribution": {**single_dist, **multi_dist},
+        "single_answer_ratios": {k: round(v, 3) for k, v in answer_ratios.items()},
+        "multi_distribution": dict(multi_dist) if multi_dist else {},
         "std_dev": round(std_dev, 2),
         "longest_correct_ratio": round(longest_correct_count / total, 3) if total > 0 else 0,
-        "option_completeness": round((total - missing_options) / total, 3) if total > 0 else 0,
+        "option_completeness": round(completeness, 3),
         "avg_option_length_variance": round(
             sum(compute_variance(lengths) for lengths in option_lengths) / len(option_lengths), 2
         ) if option_lengths else 0,
@@ -93,7 +115,10 @@ def compute_true_false_metrics(questions):
     if not questions:
         return None
 
-    true_count = sum(1 for q in questions if q.get("answer", "").strip() in ("正确", "对", "T", "True", "√"))
+    true_count = sum(
+        1 for q in questions
+        if str(q.get("answer", "")).strip().upper() in ("正确", "对", "T", "TRUE", "√", "是")
+    )
     false_count = len(questions) - true_count
     total = len(questions)
 
@@ -130,7 +155,9 @@ def compute_subjective_metrics(questions, total_score):
 
     has_rubric = sum(1 for q in questions if q.get("rubric", "").strip())
     total = len(questions)
-    subjective_total_score = sum(q.get("score", 0) for q in questions)
+    subjective_total_score = sum(
+        float(q.get("score") or 0) for q in questions
+    )
 
     return {
         "total": total,

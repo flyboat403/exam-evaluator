@@ -7,10 +7,10 @@
     python scripts/validate_evaluation.py temp/evaluation.json [--mode overall|per_question|sampling]
 """
 
-import sys
-import json
 import argparse
+import json
 import os
+import sys
 
 REQUIRED_DIMENSIONS = ["内容效度", "结构效度", "难度控制", "区分度潜力", "规范性"]
 VALID_MODES = {"overall", "per_question", "sampling"}
@@ -189,7 +189,7 @@ def main():
         print(f"\n❌ 校验失败 — {len(errors)} 个错误：")
         for e in errors:
             print(f"   {e}")
-        print(f"\n💡 请修正以上问题后重新运行本脚本。")
+        print("\n💡 请修正以上问题后重新运行本脚本。")
         sys.exit(1)
     else:
         if warnings:
