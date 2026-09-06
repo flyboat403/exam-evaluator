@@ -117,6 +117,12 @@ def validate(evaluation, expected_mode=None):
         errors.append("[knowledge_points_summary] 缺失或不是 object")
     elif len(kps) == 0:
         errors.append("[knowledge_points_summary] 为空 — 至少需要 1 个知识点用于词云图")
+    elif len(kps) < 5:
+        warnings.append(
+            f"[knowledge_points_summary] 仅 {len(kps)} 个知识点 — 词云图几乎无信息量。"
+            "多源于 Agent 结构化时使用了粗粒度标签（如整卷单一'综合应用'），"
+            "应回 Phase 2 按题干/解析细分考点后再评估"
+        )
 
     # 6. strengths / weaknesses / suggestions
     for field in ["strengths", "weaknesses", "suggestions"]:

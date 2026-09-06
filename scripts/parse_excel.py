@@ -10,6 +10,7 @@ import argparse
 import json
 import re
 import sys
+import zipfile
 from collections import Counter
 from pathlib import Path
 
@@ -56,7 +57,9 @@ def auto_detect_columns(headers, patterns):
     for i, h in enumerate(headers):
         if h is None or i in mapping.values():
             continue
-        m = opt_re.match(str(h).strip())
+        # 与 match_header 同样归一化（去换行/空格），使 '选项 A（必填）' 也能命中
+        normalized = re.sub(r'\s|（[^）]*）|\([^)]*\)', '', str(h))
+        m = opt_re.match(normalized)
         if m:
             letter = m.group(1).lower()
             mapping[f'option_{letter}'] = i
@@ -92,10 +95,10 @@ def is_header_row(row, patterns):
     return field_hits >= 2 or (field_hits >= 1 and option_hits + field_hits >= 5)
 
 def read_excel(file_path, patterns):
-    """读取 Excel 文件所有工作表，返回 (headers, rows)
+    """读取 Excel 文件所有工作表，返回 [(sheet_name, headers, rows), ...]
 
-    每个 sheet 独立检测表头行（is_header_row），避免多 sheet 表头列序
-    不一致时静默错位；表头行从数据行中剔除。
+    每个 sheet 独立检测表头并持有自己的表头定义，调用方逐 sheet
+    做列映射——避免多 sheet 表头列序不一致时按首个表头静默错位。
     """
     file_type = detect_file_type(file_path)
 
@@ -121,30 +124,27 @@ def read_excel(file_path, patterns):
     if not sheet_data:
         raise ValueError("Excel 文件为空")
 
-    # 逐 sheet 剥离表头行；后续 sheet 的表头必须与首个表头一致（防列错位）
-    headers = None
-    all_rows = []
+    # 逐 sheet 检测表头；无表头 sheet（如说明页）容错跳过，仅当全部失败时才报错
+    sheet_tables = []
+    skipped_sheets = []
     for sheet_name, rows in sheet_data:
-        if headers is None:
-            candidates = [i for i, r in enumerate(rows) if is_header_row(r, patterns)]
-            if not candidates:
-                raise ValueError(f"sheet '{sheet_name}' 未检测到表头行")
-            headers = rows[candidates[0]]
-            header_start = candidates[0]
-            all_rows.extend(rows[header_start + 1:])
+        candidates = [i for i, r in enumerate(rows) if is_header_row(r, patterns)]
+        if not candidates:
+            skipped_sheets.append(sheet_name)
+            print(f"⚠️ sheet '{sheet_name}' 未检测到表头行（可能是说明页/无数据），已跳过")
             continue
-        for r in rows:
-            if is_header_row(r, patterns):
-                if [str(c).strip() if c is not None else '' for c in r] != \
-                   [str(h).strip() if h is not None else '' for h in headers]:
-                    print(f"⚠️ sheet '{sheet_name}' 表头列结构与首个 sheet 不一致，已跳过该行并告警")
-                continue
-            all_rows.append(r)
+        headers = rows[candidates[0]]
+        data = rows[candidates[0] + 1:]
+        sheet_tables.append((sheet_name, headers, data))
 
-    if not all_rows:
+    if not sheet_tables:
+        if skipped_sheets:
+            raise ValueError(f"所有 sheet 均未检测到表头行（共 {len(skipped_sheets)} 个）")
         raise ValueError("Excel 文件无有效数据行")
+    if skipped_sheets:
+        print(f"ℹ️ 跳过 {len(skipped_sheets)} 个无表头 sheet: {', '.join(skipped_sheets)}")
 
-    return headers, all_rows
+    return sheet_tables
 
 def normalize_answer(answer, question_type):
     """标准化答案格式"""
@@ -185,7 +185,10 @@ def detect_question_type(raw_type):
         return '案例分析题'
     elif '计算' in raw:
         return '计算题'
-    return raw
+    elif '应用' in raw:
+        return '应用题'
+    # 未识别题型：标记未知（跳过），不透传原始值入库
+    return '未知'
 
 def normalize_difficulty(raw_diff):
     """标准化难度"""
@@ -201,106 +204,115 @@ def normalize_difficulty(raw_diff):
     return '中'
 
 def parse_excel(file_path, output_path, confirm=False):
-    """主解析函数"""
+    """主解析函数：逐 sheet 独立检测表头并做列映射"""
     patterns = load_header_patterns()
-    headers, data_rows = read_excel(file_path, patterns)
-    
-    # 自动检测列映射
-    col_mapping = auto_detect_columns(headers, patterns)
-    
-    # 计算匹配度
+    sheet_tables = read_excel(file_path, patterns)
+
     expected_fields = ['question_type', 'stem', 'answer']
-    matched = sum(1 for f in expected_fields if f in col_mapping)
-    confidence = matched / len(expected_fields)
-    
-    if confidence < 0.8:
-        print(f"⚠️ 表头自动识别匹配度较低 ({confidence:.0%})")
-        print("检测到的列映射:")
-        for field, idx in col_mapping.items():
-            print(f"  列 {idx}: {headers[idx]} → {field}")
-        if confirm:
-            resp = input("是否继续？(y/n): ").strip().lower()
-            if resp != 'y':
-                sys.exit(1)
-        else:
-            print("提示: 使用 --confirm 参数可交互式确认列映射")
-    
     questions = []
     q_id = 1
+    low_confidence_sheets = []
+    overall_confidence = 1.0
+
+    for sheet_name, headers, data_rows in sheet_tables:
+        # 每个 sheet 用自己的表头做列映射（列序/列名可不同）
+        col_mapping = auto_detect_columns(headers, patterns)
+
+        matched = sum(1 for f in expected_fields if f in col_mapping)
+        confidence = matched / len(expected_fields)
+
+        if confidence < 0.8:
+            low_confidence_sheets.append(sheet_name)
+            print(f"⚠️ sheet '{sheet_name}' 表头自动识别匹配度较低 ({confidence:.0%})")
+            print("检测到的列映射:")
+            for field, idx in col_mapping.items():
+                print(f"  列 {idx}: {headers[idx]} → {field}")
+            if confirm:
+                resp = input(f"是否按此映射继续解析 sheet '{sheet_name}'？(y/n): ").strip().lower()
+                if resp != 'y':
+                    sys.exit(1)
+            else:
+                print("提示: 使用 --confirm 参数可交互式确认列映射")
+        overall_confidence = min(overall_confidence, confidence)
+
+        for row in data_rows:
+            if not row:
+                continue
+
+            type_idx = col_mapping.get('question_type')
+            if type_idx is None or type_idx >= len(row) or not row[type_idx]:
+                continue
+
+            q_type_raw = row[type_idx]
+            q_type = detect_question_type(q_type_raw)
+            if q_type == '未知':
+                continue  # 跳过表头行或无效行
+
+            # 获取其他字段（默认参数绑定当次迭代的 row/col_mapping）
+            def get_field(field_name, _row=row, _map=col_mapping, _default=''):
+                idx = _map.get(field_name)
+                if idx is not None and idx < len(_row) and _row[idx] is not None:
+                    return str(_row[idx]).strip()
+                return _default
+
+            stem = get_field('stem')
+            if not stem:
+                continue  # 跳过无题干的行
+
+            opt_keys = sorted([k for k in col_mapping if k.startswith('option_')])
+            options = [get_field(k) for k in opt_keys]
+
+            answer = normalize_answer(get_field('answer'), q_type)
+            difficulty = normalize_difficulty(get_field('difficulty'))
+            explanation = get_field('explanation')
+            knowledge_point = get_field('knowledge_point')
+
+            q = {
+                'id': q_id,
+                'question_type': q_type,
+                'confidence': '高' if confidence >= 0.8 else '中',
+                'stem': stem,
+                'options': options,
+                'answer': answer,
+                'explanation': explanation,
+                'score': 2,
+                'knowledge_point': knowledge_point,
+                'cognitive_level': '',
+                'difficulty': difficulty
+            }
+            questions.append(q)
+            q_id += 1
     
-    for row in data_rows:
-        if not row:
-            continue
-        
-        # 获取题型列
-        type_idx = col_mapping.get('question_type')
-        if type_idx is None or type_idx >= len(row) or not row[type_idx]:
-            continue
-        
-        q_type_raw = row[type_idx]
-        q_type = detect_question_type(q_type_raw)
-        if q_type == '未知':
-            continue  # 跳过表头行或无效行
-        
-        # 获取其他字段
-        def get_field(field_name, default=''):
-            idx = col_mapping.get(field_name)
-            if idx is not None and idx < len(row) and row[idx] is not None:
-                return str(row[idx]).strip()
-            return default
-        
-        stem = get_field('stem')
-        if not stem:
-            continue  # 跳过无题干的行
-        
-        opt_keys = sorted([k for k in col_mapping if k.startswith('option_')])
-        options = [get_field(k, '') for k in opt_keys]
-        
-        answer = normalize_answer(get_field('answer'), q_type)
-        difficulty = normalize_difficulty(get_field('difficulty'))
-        explanation = get_field('explanation')
-        knowledge_point = get_field('knowledge_point')
-        
-        q = {
-            'id': q_id,
-            'question_type': q_type,
-            'confidence': '高' if confidence >= 0.8 else '中',
-            'stem': stem,
-            'options': options,
-            'answer': answer,
-            'explanation': explanation,
-            'score': 2,
-            'knowledge_point': knowledge_point,
-            'cognitive_level': '',
-            'difficulty': difficulty
-        }
-        questions.append(q)
-        q_id += 1
-    
+    if not questions:
+        print("❌ 未解析出任何题目（所有数据行均被过滤），请检查表头关键词与题型/题干列内容")
+        sys.exit(1)
+
     # 获取文件名作为标题
     title = Path(file_path).stem
-    
+
     clean = {
         'metadata': {
             'title': title,
             'total_score': len(questions) * 2,
             'source_type': Path(file_path).suffix[1:],
             'source_file': Path(file_path).name,
-            'parse_confidence': round(confidence, 2)
+            'parse_confidence': round(overall_confidence, 2)
         },
-        'parse_quality': '高' if confidence >= 0.8 else '中',
+        'parse_quality': '高' if overall_confidence >= 0.8 else '中',
         'questions': questions
     }
-    
+
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(clean, f, ensure_ascii=False, indent=2)
-    
+
     print(f"✅ 解析完成: {len(questions)} 道题 → {output_path}")
-    print(f"   表头匹配度: {confidence:.0%}")
+    print(f"   表头匹配度: {overall_confidence:.0%}")
     type_dist = Counter(q['question_type'] for q in questions)
     diff_dist = Counter(q['difficulty'] for q in questions)
     print(f"   题型分布: {dict(type_dist)}")
     print(f"   难度分布: {dict(diff_dist)}")
+    if low_confidence_sheets:
+        print(f"   ⚠️ 低置信度 sheet: {', '.join(low_confidence_sheets)}（结果可信度下降，建议人工抽查标题/题干字段）")
 
 def main():
     parser = argparse.ArgumentParser(description="通用 Excel 试题解析器")
@@ -308,8 +320,18 @@ def main():
     parser.add_argument("output", help="输出 clean.json 路径")
     parser.add_argument("--confirm", action="store_true", help="交互式确认列映射")
     args = parser.parse_args()
-    
-    parse_excel(args.input, args.output, args.confirm)
+
+    try:
+        parse_excel(args.input, args.output, args.confirm)
+    except ValueError as e:
+        print(f"❌ 解析失败: {e}")
+        sys.exit(1)
+    except FileNotFoundError as e:
+        print(f"❌ 文件不存在: {e.filename}")
+        sys.exit(1)
+    except zipfile.BadZipFile:
+        print("❌ 不是有效的 Excel 文件（文件损坏或后缀伪装）")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

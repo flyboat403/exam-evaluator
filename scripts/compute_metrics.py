@@ -389,10 +389,15 @@ def validate_basic_format(questions):
                 else:
                     seen_options[stripped] = i
 
-        # 3. 标点规范检测
+        # 3. 标点规范检测（需先屏蔽代码/标识符上下文，避免技术内容假阳性）
         combined = stem + " " + " ".join(options)
         if re.search(r'[\u4e00-\u9fff]', combined):  # 有中文内容
-            half_width = re.findall(r'[,.;:]', combined)
+            # 屏蔽：包名/文件名等标识符中的点（bean.Student、.java、javax.servlet.*）、
+            #       HTML/XML 标签 <jsp:forward>、JSP 脚本 <%--...-->、函数调用签名
+            masked = re.sub(
+                r'\w+\.[\w.\[\]"\'/]*|(?<!\w)\.[\w]+\b|<[^>]+>|<%[^%]*%>|\w+\([^)]*\)',
+                '', combined)
+            half_width = re.findall(r'[,.;:]', masked)
             if half_width:
                 unique_punct = set(half_width)
                 punct_display = " ".join(f"「{p}」" for p in sorted(unique_punct))
@@ -406,9 +411,9 @@ def validate_basic_format(questions):
         stem_stripped = stem.strip()
         if stem_stripped:
             last_char = stem_stripped[-1]
-            # 选择题/简答题要求以问号结尾
+            # 选择题/简答题要求以问号结尾（冒号引出选项、右括号引出空位同为命题惯例）
             if qtype in ("选择题", "简答题"):
-                if last_char not in ("？", "?"):
+                if last_char not in ("？", "?", "：", ":", "）", ")"):
                     issues.append({
                         "question_id": qid,
                         "issue_type": "stem_end_punctuation",

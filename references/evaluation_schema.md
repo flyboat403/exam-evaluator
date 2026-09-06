@@ -88,6 +88,7 @@
 - 字段名拼写错误（如 `overall_scores` 写成 `overallScores`、`scores` 或 `dimension_scores`）→ `generate_report.py` 的 `.get()` 全部返回默认值，报告显示综合评分 0.0、图表空白
 - 权重键名与 `overall_scores` 键不完全一致 → 某维度权重被静默置 0
 - `knowledge_points_summary` 值为字符串 → 词云渲染失败（必须为数值）
+- `knowledge_points_summary` 去重知识点数 < 5 → 触发告警，通常是 Agent 结构化时使用了粗粒度标签（如整卷单一"JSP基础"），词云几乎无信息量；需回 Phase 2 按考纲细分考点重新归类
 
 ## 校验
 
