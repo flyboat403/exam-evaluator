@@ -117,7 +117,7 @@ def generate_html(metrics, evaluation, duplicates=None, compare=None, weights_pr
   .chart-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }}
   .chart-box {{ background: var(--bg); border-radius: 6px; padding: 16px; }}
   .chart-box h3 {{ font-size: 14px; margin-bottom: 8px; color: var(--text-muted); }}
-  .chart-interpretation {{ font-size: 12px; color: var(--text); margin-top: 10px; padding: 8px 10px; background: #fff; border-radius: 4px; border-left: 3px solid var(--accent); line-height: 1.5; }}
+  .chart-interpretation {{ font-size: 16px; color: var(--text); margin-top: 10px; padding: 10px 12px; background: #fff; border-radius: 4px; border-left: 3px solid var(--accent); line-height: 1.6; }}
   .chart-interpretation.warning {{ border-left-color: var(--yellow); }}
   .chart-interpretation.danger {{ border-left-color: var(--red); }}
   .word-cloud {{ display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; padding: 16px; min-height: 120px; }}
@@ -272,17 +272,23 @@ def generate_html(metrics, evaluation, duplicates=None, compare=None, weights_pr
         html += """    <div class="chart-row" style="margin-top:16px;">
       <div class="chart-box"><h3>选择题答案分布</h3><canvas id="answerChart"></canvas>
 """
-        # 答案分布解读
-        if answer_dist:
-            max_ans = max(answer_dist, key=answer_dist.get)
-            min_ans = min(answer_dist, key=answer_dist.get)
-            max_ratio = answer_dist[max_ans] / choice_metrics.get("total", 1)
-            min_ratio = answer_dist[min_ans] / choice_metrics.get("total", 1)
+        # 答案分布解读（判定仅基于单选分布；多选组合不计入均衡性判断）
+        single_ratios = choice_metrics.get("single_answer_ratios", {})
+        multi_dist = choice_metrics.get("multi_distribution", {})
+        if single_ratios:
+            max_ans = max(single_ratios, key=single_ratios.get)
+            min_ans = min(single_ratios, key=single_ratios.get)
+            max_ratio = single_ratios[max_ans]
+            min_ratio = single_ratios[min_ans]
+            multi_note = (
+                f"另有 {choice_metrics.get('multi_count', 0)} 道多选题（{'、'.join(sorted(multi_dist))}），不计入失衡判断。"
+                if multi_dist else ""
+            )
             if max_ratio > 0.35 or min_ratio < 0.15:
-                ans_interp = f"答案分布不均：{max_ans}占比{max_ratio:.1%}偏高，{min_ans}仅{min_ratio:.1%}。建议调整使各选项控制在20-30%。"
+                ans_interp = f"单选答案分布不均：{max_ans}占比{max_ratio:.1%}偏高，{min_ans}仅{min_ratio:.1%}。建议调整使各选项控制在20-30%。{multi_note}"
                 ans_cls = "danger"
             else:
-                ans_interp = f"各选项分布基本均衡（{max_ans}:{max_ratio:.1%}, {min_ans}:{min_ratio:.1%}），符合命题规范。"
+                ans_interp = f"单选选项分布基本均衡（{max_ans}:{max_ratio:.1%}, {min_ans}:{min_ratio:.1%}），符合命题规范。{multi_note}"
                 ans_cls = ""
             html += f"""<div class="chart-interpretation {ans_cls}"><strong>解读：</strong>{ans_interp}</div>"""
 
